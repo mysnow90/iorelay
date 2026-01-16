@@ -1,278 +1,238 @@
-﻿import express from "express";
-import cors from "cors";
-import { createServer } from "http";
-import { Server } from "socket.io";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-import fs from "fs";
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const cors = require("cors");
+const { v4: uuidv4 } = require("uuid");
+const fs = require("fs");
+const path = require("path");
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
-const httpServer = createServer(app);
-const io = new Server(httpServer, {
+const server = http.createServer(app);
+const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3001",
-    credentials: true
+    origin: "http://localhost:3000",
+    methods: ["GET", "POST"]
   }
 });
 
 app.use(cors());
 app.use(express.json());
 
-// Local storage files
-const STREAMS_FILE = join(__dirname, "data", "streams.json");
-const DESTINATIONS_FILE = join(__dirname, "data", "destinations.json");
-const DATA_DIR = join(__dirname, "data");
+// Data storage
+const DATA_DIR = path.join(__dirname, "data");
+const STREAMS_FILE = path.join(DATA_DIR, "streams.json");
+const DESTINATIONS_FILE = path.join(DATA_DIR, "destinations.json");
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Helper functions for local storage
-const readJSON = (file) => {
-  try {
-    if (fs.existsSync(file)) {
-      const data = fs.readFileSync(file, "utf8");
-      return JSON.parse(data) || [];
-    }
-    return [];
-  } catch (error) {
-    console.error(`Error reading ${file}:`, error);
-    return [];
-  }
-};
-
-const writeJSON = (file, data) => {
-  try {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
-  } catch (error) {
-    console.error(`Error writing ${file}:`, error);
-  }
-};
-
-// Initialize default data
+// Initialize data files
 if (!fs.existsSync(STREAMS_FILE)) {
-  writeJSON(STREAMS_FILE, [
-    {
-      id: "1",
-      name: "Main Stream",
-      rtmp_url: "rtmp://localhost:1936/live/",
-      stream_key: "main",
-      status: "stopped",
-      viewers: 0,
-      bitrate: 0,
-      created_at: new Date().toISOString()
-    },
-    {
-      id: "2",
-      name: "Backup Stream",
-      rtmp_url: "rtmp://localhost:1936/live/",
-      stream_key: "backup",
-      status: "stopped",
-      viewers: 0,
-      bitrate: 0,
-      created_at: new Date().toISOString()
-    }
-  ]);
+  fs.writeFileSync(STREAMS_FILE, JSON.stringify([]));
 }
-
 if (!fs.existsSync(DESTINATIONS_FILE)) {
-  writeJSON(DESTINATIONS_FILE, [
-    {
-      id: "youtube",
-      name: "YouTube",
-      type: "rtmp",
-      url: "rtmp://a.rtmp.youtube.com/live2",
-      enabled: true,
-      stream_key: "",
-      icon: "youtube",
-      color: "#FF0000"
-    },
-    {
-      id: "facebook",
-      name: "Facebook",
-      type: "rtmp",
-      url: "rtmp://live-api-s.facebook.com:80/rtmp/",
-      enabled: true,
-      stream_key: "",
-      icon: "facebook",
-      color: "#1877F2"
-    },
-    {
-      id: "twitch",
-      name: "Twitch",
-      type: "rtmp",
-      url: "rtmp://live.twitch.tv/app/",
-      enabled: true,
-      stream_key: "",
-      icon: "twitch",
-      color: "#9146FF"
-    }
-  ]);
+  fs.writeFileSync(DESTINATIONS_FILE, JSON.stringify([]));
 }
 
-// API Routes
-app.get("/api/ingests", (req, res) => {
-  const streams = readJSON(STREAMS_FILE);
+// Helper functions
+function readStreams() {
+  try {
+    const data = fs.readFileSync(STREAMS_FILE, "utf8");
+    return JSON.parse(data);
+  } catch (error) {
+    return [];
+  }
+}
+
+function writeStreams(streams) {
+  fs.writeFileSync(STREAMS_FILE, JSON.stringify(streams, null, 2));
+}
+
+function readDestinations() {
+  try {
+    const data = fs.readFileSync(DESTINATIONS_FILE, "utf8");
+    return JSON.parse(data);
+  } catch (error) {
+    return [];
+  }
+}
+
+function writeDestinations(destinations) {
+  fs.writeFileSync(DESTINATIONS_FILE, JSON.stringify(destinations, null, 2));
+}
+
+// Broadcast updates
+function broadcastUpdate(type, data) {
+  io.emit(`stream:${type}`, data);
+}
+
+// Streams API
+app.get("/api/streams", (req, res) => {
+  const streams = readStreams();
   res.json(streams);
 });
 
-app.post("/api/ingests", (req, res) => {
-  const streams = readJSON(STREAMS_FILE);
-  const streamKey = req.body.stream_key || `stream_${Date.now()}`;
+app.post("/api/streams", (req, res) => {
+  const streams = readStreams();
   const newStream = {
-    id: Date.now().toString(),
-    name: req.body.name || "New Stream",
-    rtmp_url: `rtmp://localhost:1936/live/${streamKey}`,
-    stream_key: streamKey,
-    status: "stopped",
-    viewers: 0,
-    bitrate: 0,
-    created_at: new Date().toISOString()
+    id: uuidv4(),
+    name: req.body.name,
+    inputUrl: req.body.inputUrl,
+    active: req.body.active !== false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
+  
   streams.push(newStream);
-  writeJSON(STREAMS_FILE, streams);
-  io.emit("stream_update", newStream);
-  res.json(newStream);
+  writeStreams(streams);
+  
+  broadcastUpdate("update", { type: "stream_added", stream: newStream });
+  res.status(201).json(newStream);
 });
 
-app.put("/api/ingests/:id", (req, res) => {
-  const streams = readJSON(STREAMS_FILE);
+app.put("/api/streams/:id", (req, res) => {
+  const streams = readStreams();
   const index = streams.findIndex(s => s.id === req.params.id);
-  if (index !== -1) {
-    streams[index] = { ...streams[index], ...req.body };
-    writeJSON(STREAMS_FILE, streams);
-    io.emit("stream_update", streams[index]);
-    res.json(streams[index]);
-  } else {
-    res.status(404).json({ error: "Stream not found" });
+  
+  if (index === -1) {
+    return res.status(404).json({ error: "Stream not found" });
   }
+  
+  streams[index] = {
+    ...streams[index],
+    ...req.body,
+    updatedAt: new Date().toISOString()
+  };
+  
+  writeStreams(streams);
+  broadcastUpdate("update", { type: "stream_updated", stream: streams[index] });
+  res.json(streams[index]);
 });
 
-app.delete("/api/ingests/:id", (req, res) => {
-  const streams = readJSON(STREAMS_FILE);
-  const filtered = streams.filter(s => s.id !== req.params.id);
-  writeJSON(STREAMS_FILE, filtered);
-  io.emit("stream_removed", req.params.id);
-  res.json({ success: true });
+app.delete("/api/streams/:id", (req, res) => {
+  let streams = readStreams();
+  const index = streams.findIndex(s => s.id === req.params.id);
+  
+  if (index === -1) {
+    return res.status(404).json({ error: "Stream not found" });
+  }
+  
+  streams = streams.filter(s => s.id !== req.params.id);
+  writeStreams(streams);
+  
+  broadcastUpdate("update", { type: "stream_deleted", streamId: req.params.id });
+  res.json({ message: "Stream deleted" });
 });
 
+// Destinations API
 app.get("/api/destinations", (req, res) => {
-  const destinations = readJSON(DESTINATIONS_FILE);
+  const destinations = readDestinations();
   res.json(destinations);
 });
 
 app.post("/api/destinations", (req, res) => {
-  const destinations = readJSON(DESTINATIONS_FILE);
-  const newDest = {
-    id: Date.now().toString(),
-    ...req.body,
-    enabled: true
+  const destinations = readDestinations();
+  const newDestination = {
+    id: uuidv4(),
+    name: req.body.name,
+    outputUrl: req.body.outputUrl,
+    active: req.body.active !== false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
-  destinations.push(newDest);
-  writeJSON(DESTINATIONS_FILE, destinations);
-  io.emit("destination_update", newDest);
-  res.json(newDest);
-});
-
-app.get("/streams/active", (req, res) => {
-  const streams = readJSON(STREAMS_FILE);
-  const active = streams.filter(s => s.status === "active");
-  res.json(active);
-});
-
-app.get("/health", (req, res) => {
-  const streams = readJSON(STREAMS_FILE);
-  const activeCount = streams.filter(s => s.status === "active").length;
-  const totalViewers = streams.reduce((sum, s) => sum + s.viewers, 0);
   
-  res.json({
-    status: "healthy",
-    timestamp: new Date().toISOString(),
-    stats: {
-      total_streams: streams.length,
-      active_streams: activeCount,
-      total_viewers: totalViewers,
-      uptime: process.uptime()
-    },
-    services: {
-      api: "running",
-      rtmp: "checking...",
-      hls: "checking...",
-      websocket: "connected"
-    }
-  });
+  destinations.push(newDestination);
+  writeDestinations(destinations);
+  
+  broadcastUpdate("update", { type: "destination_added", destination: newDestination });
+  res.status(201).json(newDestination);
 });
 
-app.get("/api/stats", (req, res) => {
-  const streams = readJSON(STREAMS_FILE);
-  const stats = {
-    total: streams.length,
-    active: streams.filter(s => s.status === "active").length,
-    total_viewers: streams.reduce((sum, s) => sum + s.viewers, 0),
-    streams: streams.map(s => ({
-      id: s.id,
-      name: s.name,
-      status: s.status,
-      viewers: s.viewers,
-      bitrate: s.bitrate,
-      created_at: s.created_at
-    }))
+app.put("/api/destinations/:id", (req, res) => {
+  const destinations = readDestinations();
+  const index = destinations.findIndex(d => d.id === req.params.id);
+  
+  if (index === -1) {
+    return res.status(404).json({ error: "Destination not found" });
+  }
+  
+  destinations[index] = {
+    ...destinations[index],
+    ...req.body,
+    updatedAt: new Date().toISOString()
   };
+  
+  writeDestinations(destinations);
+  broadcastUpdate("update", { type: "destination_updated", destination: destinations[index] });
+  res.json(destinations[index]);
+});
+
+app.delete("/api/destinations/:id", (req, res) => {
+  let destinations = readDestinations();
+  const index = destinations.findIndex(d => d.id === req.params.id);
+  
+  if (index === -1) {
+    return res.status(404).json({ error: "Destination not found" });
+  }
+  
+  destinations = destinations.filter(d => d.id !== req.params.id);
+  writeDestinations(destinations);
+  
+  broadcastUpdate("update", { type: "destination_deleted", destinationId: req.params.id });
+  res.json({ message: "Destination deleted" });
+});
+
+// Stats API
+app.get("/api/stats", (req, res) => {
+  const streams = readStreams();
+  const destinations = readDestinations();
+  
+  const stats = {
+    streams: streams.length,
+    destinations: destinations.length,
+    activeStreams: streams.filter(s => s.active).length,
+    activeDestinations: destinations.filter(d => d.active).length,
+    lastUpdated: new Date().toISOString()
+  };
+  
   res.json(stats);
 });
 
-// Stream preview endpoint
-app.get("/api/streams/:key/preview", (req, res) => {
-  const { key } = req.params;
+// Health check
+app.get("/api/health", (req, res) => {
   res.json({
-    hls_url: `http://localhost:8001/live/${key}/index.m3u8`,
-    rtmp_url: `rtmp://localhost:1936/live/${key}`,
-    status: "available"
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
   });
 });
 
-// WebSocket connections
+// Socket.IO
 io.on("connection", (socket) => {
-  console.log(`🔌 WebSocket client connected: ${socket.id}`);
+  console.log("Client connected:", socket.id);
   
-  // Send initial data
-  socket.emit("init", {
-    streams: readJSON(STREAMS_FILE),
-    destinations: readJSON(DESTINATIONS_FILE),
-    server_time: new Date().toISOString()
-  });
+  // Send initial stats
+  const streams = readStreams();
+  const destinations = readDestinations();
+  const stats = {
+    streams: streams.length,
+    destinations: destinations.length,
+    activeStreams: streams.filter(s => s.active).length
+  };
+  
+  socket.emit("stream:stats", stats);
+  socket.emit("connected", { message: "Connected to ioRelay" });
   
   socket.on("disconnect", () => {
-    console.log(`🔌 WebSocket client disconnected: ${socket.id}`);
-  });
-  
-  socket.on("get_streams", () => {
-    socket.emit("streams_update", readJSON(STREAMS_FILE));
-  });
-  
-  socket.on("get_destinations", () => {
-    socket.emit("destinations_update", readJSON(DESTINATIONS_FILE));
+    console.log("Client disconnected:", socket.id);
   });
 });
 
-// Start server
-const PORT = 3100;
-httpServer.listen(PORT, () => {
-  console.log("=======================================");
-  console.log("   IORELAY888 - API Server");
-  console.log("=======================================");
-  console.log("");
-  console.log(`✅ API Server: http://localhost:${PORT}`);
-  console.log(`✅ WebSocket: ws://localhost:${PORT}`);
-  console.log("");
-  console.log("📊 Endpoints:");
-  console.log(`   GET  /api/ingests      - List all streams`);
-  console.log(`   POST /api/ingests      - Create new stream`);
-  console.log(`   GET  /api/destinations - List destinations`);
-  console.log(`   GET  /health           - System health`);
-  console.log(`   GET  /api/stats        - Statistics`);
-  console.log("");
-  console.log("=======================================");
+const PORT = 3001;
+server.listen(PORT, () => {
+  console.log(`?? Backend server running on http://localhost:${PORT}`);
+  console.log(`?? WebSocket server ready for connections`);
+  console.log(`?? Data directory: ${DATA_DIR}`);
 });

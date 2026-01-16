@@ -1,7 +1,8 @@
-﻿{
-  "name": "nms",
-  "version": "1.0.0",
-  "type": "module",
+{
+  "name": "iorelay-nms",
+  "version": "0.1.0",
+  "description": "ioRelay NMS",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },

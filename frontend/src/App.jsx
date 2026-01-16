@@ -1,714 +1,592 @@
-﻿import React, { useState, useEffect } from "react";
-import { Layout, Card, Row, Col, Button, Table, Tag, Statistic, Alert, Input, Modal, Form, Select, Spin, Space, Typography, Tooltip, Progress, Avatar, Divider, notification } from "antd";
-import { PlayCircleOutlined, StopOutlined, PlusOutlined, DashboardOutlined, SettingOutlined, EyeOutlined, CloudUploadOutlined, LineChartOutlined, LinkOutlined, CopyOutlined, CheckCircleOutlined, WarningOutlined, InfoCircleOutlined, YoutubeOutlined, FacebookOutlined, TwitchOutlined, DeleteOutlined, EditOutlined } from "@ant-design/icons";
-import axios from "axios";
-import io from "socket.io-client";
-import "./index.css";
+import { useState, useEffect } from "react"
+import { io } from "socket.io-client"
+import axios from "axios"
+import "./App.css"
+import "./styles/dashboard.css"
 
-const { Header, Content, Sider } = Layout;
-const { Title, Text, Paragraph } = Typography;
-const { Option } = Select;
-
-// Color scheme from your reference
-const colors = {
-  primary: "#1890ff",      // Ant Design Blue
-  secondary: "#52c41a",    // Green
-  danger: "#ff4d4f",       // Red
-  warning: "#faad14",      // Yellow/Gold
-  dark: "#001529",         // Dark Blue
-  light: "#f0f2f5",        // Light Gray
-  purple: "#722ed1",       // Purple
-  cyan: "#13c2c2",         // Cyan
-  magenta: "#eb2f96",      // Magenta
-  gradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-};
+const API_URL = "http://localhost:3001/api"
+const SOCKET_URL = "http://localhost:3001"
 
 function App() {
-  const [streams, setStreams] = useState([]);
-  const [destinations, setDestinations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [destinationModalVisible, setDestinationModalVisible] = useState(false);
-  const [stats, setStats] = useState({});
-  const [socket, setSocket] = useState(null);
-  const [form] = Form.useForm();
-  const [destForm] = Form.useForm();
-  const [activeTab, setActiveTab] = useState("streams");
+  const [streams, setStreams] = useState([])
+  const [destinations, setDestinations] = useState([])
+  const [newStream, setNewStream] = useState({ name: "", inputUrl: "", active: true })
+  const [newDestination, setNewDestination] = useState({ name: "", outputUrl: "", active: true })
+  const [socket, setSocket] = useState(null)
+  const [stats, setStats] = useState({ streams: 0, destinations: 0, activeStreams: 0 })
+  const [loading, setLoading] = useState(true)
 
+  // Initialize socket connection
   useEffect(() => {
-    const newSocket = io("http://localhost:3100");
-    setSocket(newSocket);
+    const newSocket = io(SOCKET_URL)
+    setSocket(newSocket)
 
-    newSocket.on("connect", () => {
-      console.log("Connected to WebSocket");
-    });
+    newSocket.on("stream:update", () => {
+      fetchStreams()
+      fetchDestinations()
+    })
 
-    newSocket.on("init", (data) => {
-      setStreams(data.streams || []);
-      setDestinations(data.destinations || []);
-      setLoading(false);
-    });
+    newSocket.on("stream:stats", (data) => {
+      setStats(data)
+    })
 
-    newSocket.on("stream_update", (stream) => {
-      setStreams(prev => {
-        const index = prev.findIndex(s => s.id === stream.id);
-        if (index >= 0) {
-          const updated = [...prev];
-          updated[index] = stream;
-          return updated;
-        }
-        return [...prev, stream];
-      });
-      
-      notification.success({
-        message: "Stream Updated",
-        description: `${stream.name} is now ${stream.status}`,
-      });
-    });
+    return () => newSocket.close()
+  }, [])
 
-    newSocket.on("destination_update", (dest) => {
-      setDestinations(prev => {
-        const index = prev.findIndex(d => d.id === dest.id);
-        if (index >= 0) {
-          const updated = [...prev];
-          updated[index] = dest;
-          return updated;
-        }
-        return [...prev, dest];
-      });
-    });
+  // Fetch data on mount
+  useEffect(() => {
+    fetchAllData()
+  }, [])
 
-    newSocket.on("stream_removed", (streamId) => {
-      setStreams(prev => prev.filter(s => s.id !== streamId));
-    });
+  const fetchAllData = async () => {
+    setLoading(true)
+    await Promise.all([
+      fetchStreams(),
+      fetchDestinations(),
+      fetchStats()
+    ])
+    setLoading(false)
+  }
 
-    fetchData();
-
-    return () => newSocket.close();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchStreams = async () => {
     try {
-      const [streamsRes, destsRes, statsRes] = await Promise.all([
-        axios.get("http://localhost:3100/api/ingests"),
-        axios.get("http://localhost:3100/api/destinations"),
-        axios.get("http://localhost:3100/api/stats")
-      ]);
-      setStreams(streamsRes.data);
-      setDestinations(destsRes.data);
-      setStats(statsRes.data);
+      const response = await axios.get(`${API_URL}/streams`)
+      setStreams(response.data || [])
     } catch (error) {
-      console.error("Error fetching data:", error);
-      notification.error({
-        message: "Connection Error",
-        description: "Cannot connect to server. Make sure backend is running.",
-      });
-    } finally {
-      setLoading(false);
+      console.error("Error fetching streams:", error)
+      setStreams([])
     }
-  };
+  }
 
-  const handleCreateStream = async (values) => {
+  const fetchDestinations = async () => {
     try {
-      await axios.post("http://localhost:3100/api/ingests", {
-        name: values.name,
-        stream_key: values.stream_key || `stream_${Date.now()}`,
-      });
-      setModalVisible(false);
-      form.resetFields();
-      notification.success({
-        message: "Stream Created",
-        description: "New stream has been created successfully.",
-      });
+      const response = await axios.get(`${API_URL}/destinations`)
+      setDestinations(response.data || [])
     } catch (error) {
-      console.error("Error creating stream:", error);
-      notification.error({
-        message: "Creation Failed",
-        description: "Failed to create stream. Please try again.",
-      });
+      console.error("Error fetching destinations:", error)
+      setDestinations([])
     }
-  };
+  }
 
-  const handleCreateDestination = async (values) => {
+  const fetchStats = async () => {
     try {
-      await axios.post("http://localhost:3100/api/destinations", values);
-      setDestinationModalVisible(false);
-      destForm.resetFields();
-      notification.success({
-        message: "Destination Added",
-        description: "New streaming destination has been added.",
-      });
+      const response = await axios.get(`${API_URL}/stats`)
+      setStats(response.data || { streams: 0, destinations: 0, activeStreams: 0 })
     } catch (error) {
-      console.error("Error creating destination:", error);
+      console.error("Error fetching stats:", error)
+      setStats({ streams: 0, destinations: 0, activeStreams: 0 })
     }
-  };
+  }
 
-  const handleStartStream = (stream) => {
-    Modal.info({
-      title: `Start Streaming: ${stream.name}`,
-      width: 700,
-      icon: <InfoCircleOutlined style={{ color: colors.primary }} />,
-      content: (
-        <div>
-          <Alert
-            message="Streaming Instructions"
-            description="Use OBS Studio or FFmpeg with the following settings:"
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-          
-          <Card title="📹 RTMP Settings" style={{ marginBottom: 16 }}>
-            <Form layout="vertical">
-              <Form.Item label="Server URL">
-                <Input 
-                  value="rtmp://localhost:1936/live" 
-                  readOnly 
-                  addonAfter={
-                    <Tooltip title="Copy">
-                      <Button 
-                        icon={<CopyOutlined />} 
-                        onClick={() => {
-                          navigator.clipboard.writeText("rtmp://localhost:1936/live");
-                          notification.success({ message: "Copied to clipboard" });
-                        }}
-                      />
-                    </Tooltip>
-                  }
-                />
-              </Form.Item>
-              <Form.Item label="Stream Key">
-                <Input 
-                  value={stream.stream_key} 
-                  readOnly 
-                  addonAfter={
-                    <Tooltip title="Copy">
-                      <Button 
-                        icon={<CopyOutlined />} 
-                        onClick={() => {
-                          navigator.clipboard.writeText(stream.stream_key);
-                          notification.success({ message: "Copied to clipboard" });
-                        }}
-                      />
-                    </Tooltip>
-                  }
-                />
-              </Form.Item>
-              <Form.Item label="Full RTMP URL">
-                <Input 
-                  value={`rtmp://localhost:1936/live/${stream.stream_key}`}
-                  readOnly 
-                  addonAfter={
-                    <Tooltip title="Copy">
-                      <Button 
-                        icon={<CopyOutlined />} 
-                        onClick={() => {
-                          navigator.clipboard.writeText(`rtmp://localhost:1936/live/${stream.stream_key}`);
-                          notification.success({ message: "Copied to clipboard" });
-                        }}
-                      />
-                    </Tooltip>
-                  }
-                />
-              </Form.Item>
-            </Form>
-          </Card>
-          
-          <Card title="📺 Watch Stream">
-            <Space direction="vertical" style={{ width: "100%" }}>
-              <Text strong>HLS Playback URL:</Text>
-              <Input 
-                value={`http://localhost:8001/live/${stream.stream_key}/index.m3u8`}
-                readOnly 
-                addonAfter={
-                  <Tooltip title="Copy">
-                    <Button 
-                      icon={<CopyOutlined />} 
-                      onClick={() => {
-                        navigator.clipboard.writeText(`http://localhost:8001/live/${stream.stream_key}/index.m3u8`);
-                        notification.success({ message: "Copied to clipboard" });
-                      }}
-                    />
-                  </Tooltip>
-                }
-              />
-              <Text type="secondary">
-                Open this URL in VLC, OBS, or any HLS compatible player
-              </Text>
-            </Space>
-          </Card>
-        </div>
-      ),
-    });
-  };
+  const handleAddStream = async (e) => {
+    e.preventDefault()
+    if (!newStream.name || !newStream.inputUrl) {
+      alert("Please fill in all fields")
+      return
+    }
 
-  const handleDeleteStream = async (streamId) => {
-    Modal.confirm({
-      title: "Delete Stream",
-      content: "Are you sure you want to delete this stream?",
-      okText: "Delete",
-      okType: "danger",
-      cancelText: "Cancel",
-      onOk: async () => {
-        try {
-          await axios.delete(`http://localhost:3100/api/ingests/${streamId}`);
-          notification.success({
-            message: "Stream Deleted",
-            description: "Stream has been deleted successfully.",
-          });
-        } catch (error) {
-          console.error("Error deleting stream:", error);
-        }
-      },
-    });
-  };
-
-  const handleUpdateStatus = async (streamId, currentStatus) => {
-    const newStatus = currentStatus === "active" ? "stopped" : "active";
     try {
-      await axios.put(`http://localhost:3100/api/ingests/${streamId}`, {
-        status: newStatus,
-        viewers: newStatus === "active" ? Math.floor(Math.random() * 100) + 1 : 0
-      });
+      await axios.post(`${API_URL}/streams`, newStream)
+      setNewStream({ name: "", inputUrl: "", active: true })
+      fetchStreams()
     } catch (error) {
-      console.error("Error updating stream:", error);
+      console.error("Error adding stream:", error)
+      alert("Failed to add stream")
     }
-  };
+  }
 
-  const getPlatformIcon = (name) => {
-    const lowerName = name.toLowerCase();
-    if (lowerName.includes("youtube")) return <YoutubeOutlined style={{ color: "#FF0000" }} />;
-    if (lowerName.includes("facebook")) return <FacebookOutlined style={{ color: "#1877F2" }} />;
-    if (lowerName.includes("twitch")) return <TwitchOutlined style={{ color: "#9146FF" }} />;
-    return <LinkOutlined />;
-  };
+  const handleAddDestination = async (e) => {
+    e.preventDefault()
+    if (!newDestination.name || !newDestination.outputUrl) {
+      alert("Please fill in all fields")
+      return
+    }
 
-  const streamColumns = [
-    {
-      title: "Stream Name",
-      dataIndex: "name",
-      key: "name",
-      render: (text, record) => (
-        <Space direction="vertical" size={2}>
-          <Text strong style={{ color: colors.dark }}>{text}</Text>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Key: <Tag color="blue" style={{ fontSize: 11, padding: "0 6px" }}>{record.stream_key}</Tag>
-          </Text>
-        </Space>
-      ),
-    },
-    {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      render: (status) => (
-        <Tag 
-          color={status === "active" ? "green" : "red"} 
-          icon={status === "active" ? <CheckCircleOutlined /> : <StopOutlined />}
-          style={{ fontWeight: "bold", padding: "4px 8px" }}
-        >
-          {status === "active" ? "LIVE" : "STOPPED"}
-        </Tag>
-      ),
-    },
-    {
-      title: "Viewers",
-      dataIndex: "viewers",
-      key: "viewers",
-      render: (viewers) => (
-        <Space>
-          <EyeOutlined style={{ color: colors.secondary }} />
-          <Text strong>{viewers}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: "Bitrate",
-      dataIndex: "bitrate",
-      key: "bitrate",
-      render: (bitrate) => (
-        <Space>
-          <LineChartOutlined style={{ color: colors.cyan }} />
-          <Text>{bitrate > 0 ? `${(bitrate / 1000).toFixed(1)} Mbps` : "-"}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: "Actions",
-      key: "actions",
-      render: (_, record) => (
-        <Space>
-          <Tooltip title="Start Streaming">
-            <Button 
-              type="primary" 
-              icon={<PlayCircleOutlined />} 
-              onClick={() => handleStartStream(record)}
-            />
-          </Tooltip>
-          <Tooltip title={record.status === "active" ? "Stop Stream" : "Activate Stream"}>
-            <Button 
-              type={record.status === "active" ? "default" : "primary"}
-              danger={record.status === "active"}
-              icon={record.status === "active" ? <StopOutlined /> : <PlayCircleOutlined />}
-              onClick={() => handleUpdateStatus(record.id, record.status)}
-            />
-          </Tooltip>
-          <Tooltip title="Delete Stream">
-            <Button 
-              danger 
-              icon={<DeleteOutlined />}
-              onClick={() => handleDeleteStream(record.id)}
-            />
-          </Tooltip>
-        </Space>
-      ),
-    },
-  ];
+    try {
+      await axios.post(`${API_URL}/destinations`, newDestination)
+      setNewDestination({ name: "", outputUrl: "", active: true })
+      fetchDestinations()
+    } catch (error) {
+      console.error("Error adding destination:", error)
+      alert("Failed to add destination")
+    }
+  }
+
+  const handleToggleStream = async (id, active) => {
+    try {
+      await axios.put(`${API_URL}/streams/${id}`, { active: !active })
+      fetchStreams()
+    } catch (error) {
+      console.error("Error toggling stream:", error)
+    }
+  }
+
+  const handleToggleDestination = async (id, active) => {
+    try {
+      await axios.put(`${API_URL}/destinations/${id}`, { active: !active })
+      fetchDestinations()
+    } catch (error) {
+      console.error("Error toggling destination:", error)
+    }
+  }
+
+  const handleDeleteStream = async (id) => {
+    if (!confirm("Are you sure you want to delete this stream?")) return
+    
+    try {
+      await axios.delete(`${API_URL}/streams/${id}`)
+      fetchStreams()
+    } catch (error) {
+      console.error("Error deleting stream:", error)
+    }
+  }
+
+  const handleDeleteDestination = async (id) => {
+    if (!confirm("Are you sure you want to delete this destination?")) return
+    
+    try {
+      await axios.delete(`${API_URL}/destinations/${id}`)
+      fetchDestinations()
+    } catch (error) {
+      console.error("Error deleting destination:", error)
+    }
+  }
 
   if (loading) {
     return (
-      <div style={{ 
-        display: "flex", 
-        justifyContent: "center", 
-        alignItems: "center", 
-        height: "100vh",
-        background: colors.gradient 
-      }}>
-        <Spin size="large" tip="Loading IORELAY888..." />
+      <div className="dashboard-container flex items-center justify-center">
+        <div className="text-white text-xl">Loading ioRelay Dashboard...</div>
       </div>
-    );
+    )
   }
 
   return (
-    <Layout style={{ minHeight: "100vh", background: colors.gradient }}>
-      <Header style={{ 
-        background: "rgba(255, 255, 255, 0.95)", 
-        backdropFilter: "blur(10px)",
-        padding: "0 24px",
-        borderBottom: `1px solid ${colors.light}`
-      }}>
-        <Row align="middle" justify="space-between">
-          <Col>
-            <Space>
-              <CloudUploadOutlined style={{ fontSize: 28, color: colors.primary }} />
-              <Space direction="vertical" size={0}>
-                <Title level={3} style={{ margin: 0, color: colors.dark }}>IORELAY888</Title>
-                <Text type="secondary" style={{ fontSize: 12 }}>Professional Streaming Server</Text>
-              </Space>
-            </Space>
-          </Col>
-          <Col>
-            <Space size="large">
-              <Statistic
-                title="Active Streams"
-                value={stats.active || 0}
-                valueStyle={{ color: colors.primary, fontSize: 24 }}
-                prefix={<PlayCircleOutlined />}
-              />
-              <Statistic
-                title="Total Viewers"
-                value={stats.total_viewers || 0}
-                valueStyle={{ color: colors.secondary, fontSize: 24 }}
-                prefix={<EyeOutlined />}
-              />
-              <Statistic
-                title="Total Streams"
-                value={stats.total || 0}
-                valueStyle={{ color: colors.purple, fontSize: 24 }}
-                prefix={<DashboardOutlined />}
-              />
-            </Space>
-          </Col>
-        </Row>
-      </Header>
-
-      <Layout>
-        <Sider width={280} style={{ 
-          background: "rgba(255, 255, 255, 0.9)", 
-          margin: 16, 
-          borderRadius: 12,
-          border: `1px solid rgba(0, 0, 0, 0.1)`
-        }}>
-          <div style={{ padding: 24 }}>
-            <Space direction="vertical" style={{ width: "100%" }}>
-              <Button
-                type="primary"
-                block
-                size="large"
-                icon={<PlusOutlined />}
-                onClick={() => setModalVisible(true)}
-                style={{ 
-                  background: colors.primary,
-                  border: "none",
-                  height: 48,
-                  fontWeight: "bold"
-                }}
-              >
-                New Stream
-              </Button>
-              <Button
-                block
-                size="large"
-                icon={<LinkOutlined />}
-                onClick={() => setDestinationModalVisible(true)}
-                style={{ height: 48 }}
-              >
-                Add Destination
-              </Button>
-            </Space>
+    <div className="dashboard-container">
+      {/* Header */}
+      <header className="bg-gradient-to-r from-gray-800 to-gray-900 border-b border-gray-700 shadow-lg py-6">
+        <div className="container mx-auto px-6">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center">
+            <div className="mb-4 md:mb-0">
+              <h1 className="text-4xl font-bold gradient-text">ioRelay</h1>
+              <p className="text-gray-400 mt-2">RTMP Stream Relay Dashboard</p>
+            </div>
             
-            <Divider />
-            
-            <Space direction="vertical" style={{ width: "100%" }}>
-              <Button 
-                type={activeTab === "streams" ? "primary" : "text"}
-                block 
-                icon={<DashboardOutlined />}
-                onClick={() => setActiveTab("streams")}
-                style={{ textAlign: "left", height: 40 }}
-              >
-                Stream Management
-              </Button>
-              <Button 
-                type={activeTab === "destinations" ? "primary" : "text"}
-                block 
-                icon={<SettingOutlined />}
-                onClick={() => setActiveTab("destinations")}
-                style={{ textAlign: "left", height: 40 }}
-              >
-                Destinations
-              </Button>
-              <Button 
-                type={activeTab === "stats" ? "primary" : "text"}
-                block 
-                icon={<LineChartOutlined />}
-                onClick={() => setActiveTab("stats")}
-                style={{ textAlign: "left", height: 40 }}
-              >
-                Statistics
-              </Button>
-            </Space>
-            
-            <Card 
-              title="System Info" 
-              size="small" 
-              style={{ marginTop: 24, background: "rgba(240, 242, 245, 0.5)" }}
-            >
-              <Space direction="vertical" style={{ width: "100%" }}>
-                <Text type="secondary">RTMP Server</Text>
-                <Text copyable strong>rtmp://localhost:1936</Text>
-                
-                <Text type="secondary" style={{ marginTop: 8 }}>HLS Server</Text>
-                <Text copyable strong>http://localhost:8001</Text>
-                
-                <Text type="secondary" style={{ marginTop: 8 }}>API Server</Text>
-                <Text copyable strong>http://localhost:3100</Text>
-              </Space>
-            </Card>
+            <div className="flex flex-wrap gap-6">
+              <div className="dashboard-card p-4 min-w-[100px] text-center">
+                <div className="text-3xl font-bold text-blue-400">{stats.streams || 0}</div>
+                <div className="text-sm text-gray-400 mt-1">Streams</div>
+              </div>
+              <div className="dashboard-card p-4 min-w-[100px] text-center">
+                <div className="text-3xl font-bold text-green-400">{stats.destinations || 0}</div>
+                <div className="text-sm text-gray-400 mt-1">Destinations</div>
+              </div>
+              <div className="dashboard-card p-4 min-w-[100px] text-center">
+                <div className="text-3xl font-bold text-purple-400">{stats.activeStreams || 0}</div>
+                <div className="text-sm text-gray-400 mt-1">Active</div>
+              </div>
+            </div>
           </div>
-        </Sider>
+        </div>
+      </header>
 
-        <Content style={{ padding: 24 }}>
-          {activeTab === "streams" && (
-            <Card 
-              title={
-                <Space>
-                  <DashboardOutlined />
-                  <span>Stream Management</span>
-                  <Tag color="blue">{streams.length} streams</Tag>
-                </Space>
-              }
-              className="glass-card"
-              extra={
-                <Button 
-                  type="primary" 
-                  icon={<PlusOutlined />}
-                  onClick={() => setModalVisible(true)}
+      <main className="container mx-auto px-6 py-8">
+        {/* Configuration Cards */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+          {/* Stream Configuration */}
+          <div className="dashboard-card overflow-hidden">
+            <div className="card-header-blue">
+              <h2 className="text-2xl font-bold">Configure Stream</h2>
+              <p className="text-blue-100 text-sm">Add new RTMP input stream</p>
+            </div>
+            
+            <div className="p-6">
+              <form onSubmit={handleAddStream} className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Stream Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newStream.name}
+                    onChange={(e) => setNewStream({ ...newStream, name: e.target.value })}
+                    className="dashboard-input w-full"
+                    placeholder="e.g., Camera 1"
+                    required
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    RTMP Input URL
+                  </label>
+                  <input
+                    type="text"
+                    value={newStream.inputUrl}
+                    onChange={(e) => setNewStream({ ...newStream, inputUrl: e.target.value })}
+                    className="dashboard-input w-full"
+                    placeholder="rtmp://localhost/live/{streamKey}"
+                    required
+                  />
+                </div>
+                
+                <div className="flex items-center justify-between pt-4 border-t border-gray-700">
+                  <label className="flex items-center space-x-3 cursor-pointer">
+                    <div className="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={newStream.active}
+                        onChange={(e) => setNewStream({ ...newStream, active: e.target.checked })}
+                      />
+                      <span className="toggle-slider"></span>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-300">Active</span>
+                      <p className="text-xs text-gray-500">Enable this stream</p>
+                    </div>
+                  </label>
+                  
+                  <button
+                    type="submit"
+                    className="btn-primary"
+                  >
+                    Add Stream
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          {/* Destination Configuration */}
+          <div className="dashboard-card overflow-hidden">
+            <div className="card-header-purple">
+              <h2 className="text-2xl font-bold">Configure Destination</h2>
+              <p className="text-purple-100 text-sm">Add RTMP output destination</p>
+            </div>
+            
+            <div className="p-6">
+              <form onSubmit={handleAddDestination} className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Destination Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newDestination.name}
+                    onChange={(e) => setNewDestination({ ...newDestination, name: e.target.value })}
+                    className="dashboard-input w-full"
+                    placeholder="e.g., YouTube Live"
+                    required
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    RTMP Output URL
+                  </label>
+                  <input
+                    type="text"
+                    value={newDestination.outputUrl}
+                    onChange={(e) => setNewDestination({ ...newDestination, outputUrl: e.target.value })}
+                    className="dashboard-input w-full"
+                    placeholder="rtmp://a.rtmp.youtube.com/live2/{streamKey}"
+                    required
+                  />
+                </div>
+                
+                <div className="flex items-center justify-between pt-4 border-t border-gray-700">
+                  <label className="flex items-center space-x-3 cursor-pointer">
+                    <div className="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={newDestination.active}
+                        onChange={(e) => setNewDestination({ ...newDestination, active: e.target.checked })}
+                      />
+                      <span className="toggle-slider"></span>
+                    </div>
+                    <div>
+                      <span className="font-medium text-gray-300">Active</span>
+                      <p className="text-xs text-gray-500">Enable this destination</p>
+                    </div>
+                  </label>
+                  
+                  <button
+                    type="submit"
+                    className="btn-primary"
+                  >
+                    Add Destination
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        {/* Streams & Destinations Lists */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
+          {/* Streams List */}
+          <div className="dashboard-card overflow-hidden">
+            <div className="card-header-blue flex justify-between items-center">
+              <div>
+                <h2 className="text-2xl font-bold">Streams</h2>
+                <p className="text-blue-100 text-sm">Active input streams</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <span className="stat-badge">
+                  {streams.filter(s => s.active).length} active
+                </span>
+                <button
+                  onClick={fetchStreams}
+                  className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-white transition-all"
                 >
-                  Add Stream
-                </Button>
-              }
-            >
-              <Table
-                columns={streamColumns}
-                dataSource={streams}
-                rowKey="id"
-                pagination={{ pageSize: 10 }}
-                rowClassName={(record) => record.status === "active" ? "active-row" : ""}
-              />
-            </Card>
-          )}
-          
-          {activeTab === "destinations" && (
-            <Card 
-              title={
-                <Space>
-                  <LinkOutlined />
-                  <span>Streaming Destinations</span>
-                  <Tag color="green">{destinations.length} platforms</Tag>
-                </Space>
-              }
-              className="glass-card"
-            >
-              <Row gutter={[16, 16]}>
-                {destinations.map(dest => (
-                  <Col span={8} key={dest.id}>
-                    <Card
-                      hoverable
-                      style={{ 
-                        borderRadius: 12,
-                        border: `2px solid ${dest.enabled ? dest.color || colors.primary : "#d9d9d9"}`,
-                        opacity: dest.enabled ? 1 : 0.6
-                      }}
-                    >
-                      <Space direction="vertical" align="center" style={{ width: "100%" }}>
-                        {getPlatformIcon(dest.name)}
-                        <Title level={5} style={{ margin: 0 }}>{dest.name}</Title>
-                        <Tag color={dest.enabled ? "success" : "default"}>
-                          {dest.enabled ? "ENABLED" : "DISABLED"}
-                        </Tag>
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          {dest.type.toUpperCase()}
-                        </Text>
-                        <Text code style={{ fontSize: 11 }} ellipsis>
-                          {dest.url}
-                        </Text>
-                      </Space>
-                    </Card>
-                  </Col>
-                ))}
-              </Row>
-            </Card>
-          )}
-          
-          {activeTab === "stats" && (
-            <Card 
-              title={
-                <Space>
-                  <LineChartOutlined />
-                  <span>System Statistics</span>
-                </Space>
-              }
-              className="glass-card"
-            >
-              <Row gutter={[16, 16]}>
-                <Col span={8}>
-                  <Card>
-                    <Statistic
-                      title="Uptime"
-                      value={Math.floor(process.uptime() / 60)}
-                      suffix="minutes"
-                      prefix={<CheckCircleOutlined style={{ color: colors.secondary }} />}
-                    />
-                  </Card>
-                </Col>
-                <Col span={8}>
-                  <Card>
-                    <Statistic
-                      title="Active Connections"
-                      value={stats.active || 0}
-                      prefix={<PlayCircleOutlined style={{ color: colors.primary }} />}
-                    />
-                  </Card>
-                </Col>
-                <Col span={8}>
-                  <Card>
-                    <Statistic
-                      title="Total Viewers"
-                      value={stats.total_viewers || 0}
-                      prefix={<EyeOutlined style={{ color: colors.magenta }} />}
-                    />
-                  </Card>
-                </Col>
-              </Row>
-              
-              <Card title="Service Status" style={{ marginTop: 16 }}>
-                <Space direction="vertical" style={{ width: "100%" }}>
-                  <Alert message="RTMP Server" description="rtmp://localhost:1936" type="success" showIcon />
-                  <Alert message="HLS Server" description="http://localhost:8001" type="success" showIcon />
-                  <Alert message="API Server" description="http://localhost:3100" type="success" showIcon />
-                  <Alert message="WebSocket" description="ws://localhost:3100" type="success" showIcon />
-                </Space>
-              </Card>
-            </Card>
-          )}
-        </Content>
-      </Layout>
+                  Refresh
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6 max-h-[500px] overflow-y-auto">
+              {streams.length > 0 ? (
+                <div className="space-y-4">
+                  {streams.map((stream) => (
+                    <div key={stream.id || stream.name} className="bg-gray-900/50 rounded-xl border border-gray-700 p-4">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center space-x-3">
+                          <div className={stream.active ? "status-active" : "status-inactive"}></div>
+                          <div>
+                            <h3 className="font-bold text-white">{stream.name}</h3>
+                            <p className="text-xs text-gray-500">
+                              Created: {new Date(stream.createdAt || Date.now()).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={() => handleToggleStream(stream.id, stream.active)}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium ${stream.active ? "btn-danger" : "btn-primary"}`}
+                          >
+                            {stream.active ? "Stop" : "Start"}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteStream(stream.id)}
+                            className="btn-danger"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div className="mt-4">
+                        <div className="text-xs text-gray-400 mb-2">Input URL:</div>
+                        <div className="code-block">
+                          <code>{stream.inputUrl}</code>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-blue-500/20 flex items-center justify-center">
+                    <svg className="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-300 mb-2">No Streams Yet</h3>
+                  <p className="text-gray-500">Add your first stream using the configuration panel above</p>
+                </div>
+              )}
+            </div>
+          </div>
 
-      {/* Create Stream Modal */}
-      <Modal
-        title="Create New Stream"
-        open={modalVisible}
-        onOk={() => form.submit()}
-        onCancel={() => setModalVisible(false)}
-        okText="Create Stream"
-        cancelText="Cancel"
-        width={500}
-      >
-        <Form form={form} layout="vertical" onFinish={handleCreateStream}>
-          <Form.Item
-            name="name"
-            label="Stream Name"
-            rules={[{ required: true, message: "Please enter stream name" }]}
-          >
-            <Input placeholder="Enter a descriptive name" size="large" />
-          </Form.Item>
-          <Form.Item
-            name="stream_key"
-            label="Stream Key"
-            extra="Leave empty to auto-generate a unique key"
-          >
-            <Input placeholder="my_stream_key" size="large" />
-          </Form.Item>
-        </Form>
-      </Modal>
+          {/* Destinations List */}
+          <div className="dashboard-card overflow-hidden">
+            <div className="card-header-purple flex justify-between items-center">
+              <div>
+                <h2 className="text-2xl font-bold">Destinations</h2>
+                <p className="text-purple-100 text-sm">Output destinations</p>
+              </div>
+              <div className="flex items-center space-x-3">
+                <span className="stat-badge">
+                  {destinations.filter(d => d.active).length} active
+                </span>
+                <button
+                  onClick={fetchDestinations}
+                  className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-xl text-white transition-all"
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6 max-h-[500px] overflow-y-auto">
+              {destinations.length > 0 ? (
+                <div className="space-y-4">
+                  {destinations.map((destination) => (
+                    <div key={destination.id || destination.name} className="bg-gray-900/50 rounded-xl border border-gray-700 p-4">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center space-x-3">
+                          <div className={destination.active ? "status-active" : "status-inactive"}></div>
+                          <div>
+                            <h3 className="font-bold text-white">{destination.name}</h3>
+                            <p className="text-xs text-gray-500">
+                              Created: {new Date(destination.createdAt || Date.now()).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex space-x-2">
+                          <button
+                            onClick={() => handleToggleDestination(destination.id, destination.active)}
+                            className={`px-4 py-2 rounded-lg text-sm font-medium ${destination.active ? "btn-danger" : "btn-primary"}`}
+                          >
+                            {destination.active ? "Disable" : "Enable"}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteDestination(destination.id)}
+                            className="btn-danger"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                      
+                      <div className="mt-4">
+                        <div className="text-xs text-gray-400 mb-2">Output URL:</div>
+                        <div className="code-block">
+                          <code>{destination.outputUrl}</code>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-12">
+                  <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-purple-500/20 flex items-center justify-center">
+                    <svg className="w-8 h-8 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-xl font-bold text-gray-300 mb-2">No Destinations Yet</h3>
+                  <p className="text-gray-500">Add your first destination using the configuration panel above</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
 
-      {/* Create Destination Modal */}
-      <Modal
-        title="Add Streaming Destination"
-        open={destinationModalVisible}
-        onOk={() => destForm.submit()}
-        onCancel={() => setDestinationModalVisible(false)}
-        okText="Add Destination"
-        cancelText="Cancel"
-        width={500}
-      >
-        <Form form={destForm} layout="vertical" onFinish={handleCreateDestination}>
-          <Form.Item
-            name="name"
-            label="Platform Name"
-            rules={[{ required: true, message: "Please enter platform name" }]}
-          >
-            <Input placeholder="YouTube, Twitch, Facebook, etc." size="large" />
-          </Form.Item>
-          <Form.Item
-            name="type"
-            label="Stream Type"
-            rules={[{ required: true }]}
-          >
-            <Select placeholder="Select type" size="large">
-              <Option value="rtmp">RTMP</Option>
-              <Option value="hls">HLS</Option>
-              <Option value="webrtc">WebRTC</Option>
-            </Select>
-          </Form.Item>
-          <Form.Item
-            name="url"
-            label="Server URL"
-            rules={[{ required: true, message: "Please enter server URL" }]}
-          >
-            <Input placeholder="rtmp://server.url/stream" size="large" />
-          </Form.Item>
-          <Form.Item
-            name="stream_key"
-            label="Stream Key (Optional)"
-          >
-            <Input placeholder="Your stream key" size="large" />
-          </Form.Item>
-        </Form>
-      </Modal>
-    </Layout>
-  );
+        {/* Server Info Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Server Status */}
+          <div className="dashboard-card p-6">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="status-active"></div>
+              <h3 className="text-xl font-bold text-white">Server Status</h3>
+            </div>
+            <div className="space-y-4">
+              <div className="flex justify-between items-center p-3 bg-gray-900/50 rounded-xl">
+                <span className="text-gray-400">WebSocket</span>
+                <span className={`px-3 py-1 rounded-full text-sm font-medium ${socket?.connected ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
+                  {socket?.connected ? "Connected" : "Disconnected"}
+                </span>
+              </div>
+              <div className="flex justify-between items-center p-3 bg-gray-900/50 rounded-xl">
+                <span className="text-gray-400">RTMP Server</span>
+                <span className="px-3 py-1 bg-blue-500/20 text-blue-400 rounded-full text-sm font-medium">
+                  Running
+                </span>
+              </div>
+              <div className="flex justify-between items-center p-3 bg-gray-900/50 rounded-xl">
+                <span className="text-gray-400">Backend API</span>
+                <span className="px-3 py-1 bg-green-500/20 text-green-400 rounded-full text-sm font-medium">
+                  Online
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Connection Info */}
+          <div className="dashboard-card p-6">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="w-3 h-3 bg-blue-500 rounded-full"></div>
+              <h3 className="text-xl font-bold text-white">Connection Info</h3>
+            </div>
+            <div className="space-y-4">
+              <div className="p-3 bg-gray-900/50 rounded-xl">
+                <div className="text-xs text-gray-400 mb-1">RTMP Ingest URL</div>
+                <div className="code-block">
+                  <code>rtmp://localhost/live</code>
+                </div>
+              </div>
+              <div className="p-3 bg-gray-900/50 rounded-xl">
+                <div className="text-xs text-gray-400 mb-1">HLS Playback URL</div>
+                <div className="code-block">
+                  <code>http://localhost:8000/live</code>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="dashboard-card p-6">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
+              <h3 className="text-xl font-bold text-white">Quick Actions</h3>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={fetchAllData} className="p-4 bg-gray-900/50 hover:bg-gray-800/50 rounded-xl transition-all">
+                <div className="flex flex-col items-center">
+                  <svg className="w-6 h-6 text-blue-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  <span className="text-sm font-medium text-blue-300">Refresh All</span>
+                </div>
+              </button>
+              <button className="p-4 bg-gray-900/50 hover:bg-gray-800/50 rounded-xl transition-all">
+                <div className="flex flex-col items-center">
+                  <svg className="w-6 h-6 text-purple-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+                  </svg>
+                  <span className="text-sm font-medium text-purple-300">Export</span>
+                </div>
+              </button>
+              <button className="p-4 bg-gray-900/50 hover:bg-gray-800/50 rounded-xl transition-all">
+                <div className="flex flex-col items-center">
+                  <svg className="w-6 h-6 text-green-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                  </svg>
+                  <span className="text-sm font-medium text-green-300">Restart</span>
+                </div>
+              </button>
+              <button className="p-4 bg-gray-900/50 hover:bg-gray-800/50 rounded-xl transition-all">
+                <div className="flex flex-col items-center">
+                  <svg className="w-6 h-6 text-red-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  <span className="text-sm font-medium text-red-300">Clear All</span>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Footer */}
+      <footer className="border-t border-gray-800 mt-12 py-8">
+        <div className="container mx-auto px-6">
+          <div className="flex flex-col md:flex-row justify-between items-center">
+            <div className="mb-4 md:mb-0">
+              <h3 className="text-xl font-bold gradient-text">ioRelay</h3>
+              <p className="text-gray-500 text-sm">RTMP Stream Relay System v1.0.0</p>
+            </div>
+            <div className="text-center md:text-right">
+              <p className="text-gray-400">
+                Made with <span className="text-red-500">?</span> by ioRelay Team
+              </p>
+              <p className="text-gray-500 text-sm mt-1">Stream smarter, relay better.</p>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+  )
 }
 
-export default App;
+export default App
